@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-從 115年第1季 資料夾讀取實價登錄資料
+從多個實價登錄資料夾讀取資料，合併去重後更新分析 CSV
 支援 A 檔（買賣）與 B 檔（預售屋）
-輸出格式與原 kaohsiung_filtered_*.csv 完全相容
 
 執行方式：
     python load_new_data.py
@@ -13,8 +12,23 @@ from datetime import datetime
 import pandas as pd
 
 # ── 設定 ──────────────────────────────────────────────────
-SOURCE_DIR = Path("./lvr_data/115年第1季")
-OUTPUT_DIR = Path("./lvr_data")
+DATA_ROOT = Path("./lvr_data")
+
+# 要讀取的資料夾清單（相對於 DATA_ROOT）
+SOURCE_DIRS = [
+    "115年第1季",
+    "20260211_opendata",
+    "20260221_opendata",
+    "download (3)",
+]
+
+# 每個資料夾中要讀取的高雄檔案（不分大小寫）
+FILE_MAP = {
+    "e_lvr_land_a": "買賣(含新成屋/中古)",
+    "e_lvr_land_b": "預售屋",
+}
+
+OUTPUT_DIR = DATA_ROOT
 TODAY = datetime.now().strftime("%Y%m%d")
 
 TARGET_DISTRICTS = [
@@ -45,6 +59,9 @@ COL_MAP = {
     "build case":                                      "成交建案名稱",
 }
 
+# 去重依據欄位（以字串比對，避免浮點精度問題）
+DEDUP_COLS = ["地址", "交易日期", "成交總價(萬)", "總坪數"]
+
 # ── 工具函式 ───────────────────────────────────────────────
 def safe_float(v) -> float:
     try:
@@ -53,7 +70,7 @@ def safe_float(v) -> float:
         return 0.0
 
 def roc_to_date(roc: str) -> str:
-    roc = str(roc).strip().split(".")[0]   # 去除小數點
+    roc = str(roc).strip().split(".")[0]
     if not roc.isdigit():
         return ""
     try:
@@ -69,39 +86,27 @@ def roc_to_date(roc: str) -> str:
 
 def load_csv(path: Path, tx_type: str) -> list[dict]:
     """讀取一個 LVR CSV（新格式），回傳篩選後的記錄清單"""
-    # 用 skiprows=1 讓 pandas 把英文那行當 header，跳過中文說明行
     df = pd.read_csv(path, encoding="utf-8-sig", skiprows=1, dtype=str)
     df = df.rename(columns={k: v for k, v in COL_MAP.items() if k in df.columns})
     df = df.fillna("")
 
     results = []
     for _, row in df.iterrows():
-        district   = row.get("行政區", "").strip()
-        bld_type   = row.get("建物型態", "").strip()
+        district = row.get("行政區", "").strip()
+        bld_type = row.get("建物型態", "").strip()
 
-        # 篩選：目標行政區
         if district not in TARGET_DISTRICTS:
             continue
-        # 篩選：住宅大樓 / 華廈
         if not any(kw in bld_type for kw in TARGET_BUILDING_KEYWORDS):
             continue
 
-        # 面積
         area_sqm   = safe_float(row.get("建物面積_sqm", 0))
         area_ping  = round(area_sqm * SQM_TO_PING, 2)
-
-        # 價格
         total_price = round(safe_float(row.get("總價元", 0)) / 10_000, 1)
         park_price  = round(safe_float(row.get("車位總價元", 0)) / 10_000, 1)
-
-        # 每坪單價（扣車位）
         unit_price  = round((total_price - park_price) / area_ping, 2) if area_ping > 0 else 0.0
-
-        # 含車位
         park_cat   = row.get("車位類別", "").strip()
         has_park   = park_price > 0 or park_cat != ""
-
-        # 房型
         room_type  = (
             f"{row.get('房', '')}房"
             f"{row.get('廳', '')}廳"
@@ -128,52 +133,79 @@ def load_csv(path: Path, tx_type: str) -> list[dict]:
         })
     return results
 
+def find_csv(folder: Path, stem: str) -> Path | None:
+    """大小寫不分地尋找 CSV 檔案"""
+    for f in folder.glob("*.csv"):
+        if f.stem.lower() == stem.lower():
+            return f
+    return None
+
 # ── 主程式 ────────────────────────────────────────────────
 def main():
-    FILE_MAP = {
-        "E_lvr_land_A.csv": "買賣(含新成屋/中古)",
-        "E_lvr_land_B.csv": "預售屋",
-    }
+    all_records: list[dict] = []
 
-    all_records = []
-    found_files = []
-    missing_files = []
+    # 1. 讀取現有最新的過濾後 CSV（作為基底）
+    existing_csvs = sorted(OUTPUT_DIR.glob("kaohsiung_filtered_*.csv"), reverse=True)
+    if existing_csvs:
+        base_path = existing_csvs[0]
+        df_base = pd.read_csv(base_path, encoding="utf-8-sig", dtype=str)
+        all_records.extend(df_base.to_dict("records"))
+        print(f"✅ 讀取現有資料：{base_path.name}（{len(df_base)} 筆）")
+    else:
+        print("⚠️  找不到現有 kaohsiung_filtered_*.csv，將從頭建立")
 
-    for filename, tx_type in FILE_MAP.items():
-        path = SOURCE_DIR / filename
-        if path.exists() and path.stat().st_size > 0:
-            records = load_csv(path, tx_type)
-            print(f"✅ {filename}（{tx_type}）：篩選後 {len(records)} 筆")
-            all_records.extend(records)
-            found_files.append(filename)
-        else:
-            print(f"⚠️  {filename}（{tx_type}）：找不到或檔案為空")
-            missing_files.append((filename, tx_type))
+    # 2. 從各新資料夾讀取
+    print("\n── 讀取新資料夾 ─────────────────────────────────────")
+    for folder_name in SOURCE_DIRS:
+        folder = DATA_ROOT / folder_name
+        if not folder.exists():
+            print(f"  ⚠️  {folder_name}：資料夾不存在，跳過")
+            continue
+        for stem, tx_type in FILE_MAP.items():
+            csv_path = find_csv(folder, stem)
+            if csv_path and csv_path.stat().st_size > 0:
+                records = load_csv(csv_path, tx_type)
+                print(f"  ✅ {folder_name}/{csv_path.name}（{tx_type}）：篩選後 {len(records)} 筆")
+                all_records.extend(records)
+            else:
+                print(f"  ⚠️  {folder_name}/{stem}.csv：找不到或空白，跳過")
 
     if not all_records:
-        print("❌ 沒有任何資料，請確認資料夾路徑")
+        print("\n❌ 沒有任何資料，請確認資料夾路徑")
         return
 
-    # 儲存 CSV
     df_out = pd.DataFrame(all_records)
+
+    # 型別統一（避免字串 vs 數值混用導致去重失敗）
+    for col in ["總坪數", "成交總價(萬)", "車位總價(萬)", "每坪單價(萬)"]:
+        if col in df_out.columns:
+            df_out[col] = pd.to_numeric(df_out[col], errors="coerce").round(2)
+
+    # 3. 去重複（保留先出現的）
+    before = len(df_out)
+    df_out = df_out.drop_duplicates(subset=DEDUP_COLS, keep="first")
+    after  = len(df_out)
+    print(f"\n📋 去重：{before} → {after} 筆（移除 {before - after} 筆重複）")
+
+    # 4. 輸出 CSV
     output_path = OUTPUT_DIR / f"kaohsiung_filtered_{TODAY}.csv"
     df_out.to_csv(output_path, index=False, encoding="utf-8-sig")
     print(f"\n✅ 輸出完成：{output_path.resolve()}")
     print(f"   共 {len(df_out)} 筆資料")
 
-    # 摘要
+    # 5. 摘要
     print("\n📊 各交易類型筆數：")
     for t, cnt in df_out["交易類型"].value_counts().items():
         print(f"   {t}：{cnt} 筆")
 
-    print("\n📊 各行政區筆數：")
-    for d, cnt in df_out["行政區"].value_counts().items():
+    print("\n📊 各行政區筆數（前 10）：")
+    for d, cnt in df_out["行政區"].value_counts().head(10).items():
         print(f"   {d}：{cnt} 筆")
 
-    if missing_files:
-        print("\n⚠️  以下檔案不存在，資料不完整：")
-        for fname, ttype in missing_files:
-            print(f"   ➤ {fname}（{ttype}）—— 請確認是否已下載")
+    # 資料日期範圍
+    dates = pd.to_datetime(df_out["交易日期"], errors="coerce").dropna()
+    if not dates.empty:
+        print(f"\n📅 資料期間：{dates.min().strftime('%Y-%m-%d')} ～ {dates.max().strftime('%Y-%m-%d')}")
 
     print("\n🎉 完成！重新整理 Streamlit 頁面即可看到新資料")
 

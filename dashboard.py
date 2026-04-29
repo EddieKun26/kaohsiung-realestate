@@ -211,7 +211,7 @@ with st.sidebar:
     hide_price_outlier = st.checkbox("隱藏單價異常值（<5 或 >200萬）", value=True)
 
     st.divider()
-    st.caption("💡 代銷儀表板 | 高雄實價登錄 2026 Q1")
+    st.caption(f"💡 代銷儀表板 | 高雄實價登錄 | {_date_range}")
 
 
 # ── 套用篩選 ────────────────────────────────────────────────
@@ -233,7 +233,13 @@ df = apply_filters(df_all)
 
 # ── 主標題 ──────────────────────────────────────────────────
 st.title("🏙️ 高雄房產成交分析儀表板")
-st.caption("資料期間：2026年 Q1（1–3月）｜高雄 13 個行政區｜住宅大樓 & 華廈")
+_date_min = df_all["交易日期"].min()
+_date_max = df_all["交易日期"].max()
+_date_range = (
+    f"{_date_min.strftime('%Y-%m-%d')} ～ {_date_max.strftime('%Y-%m-%d')}"
+    if pd.notna(_date_min) and pd.notna(_date_max) else "—"
+)
+st.caption(f"資料期間：{_date_range}｜高雄 13 個行政區｜住宅大樓 & 華廈")
 
 # ── KPI 卡片 ────────────────────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
@@ -453,9 +459,27 @@ with tab2:
 with tab3:
     st.subheader("月度成交趨勢")
 
-    # 過濾有效日期
+    # 日期範圍篩選
+    import datetime as _dt
+    df_valid_dates = df[df["交易日期"].notna()]
+    if not df_valid_dates.empty:
+        d_min = df_valid_dates["交易日期"].min().date()
+        d_max = df_valid_dates["交易日期"].max().date()
+    else:
+        d_min = d_max = _dt.date.today()
+
+    t3_col1, t3_col2 = st.columns(2)
+    with t3_col1:
+        trend_start = st.date_input("起始日期", value=d_min, min_value=d_min, max_value=d_max, key="trend_start")
+    with t3_col2:
+        trend_end = st.date_input("結束日期", value=d_max, min_value=d_min, max_value=d_max, key="trend_end")
+
     df_trend = df[df["交易日期"].notna()].copy()
     df_trend["年月_dt"] = df_trend["交易日期"].dt.to_period("M").dt.to_timestamp()
+    df_trend = df_trend[
+        (df_trend["交易日期"].dt.date >= trend_start) &
+        (df_trend["交易日期"].dt.date <= trend_end)
+    ]
 
     # 月度成交量
     monthly_vol = (
@@ -463,7 +487,6 @@ with tab3:
         .agg(成交筆數=("每坪單價(萬)", "count"), 平均單價=("每坪單價(萬)", "mean"))
         .reset_index()
     )
-    monthly_vol = monthly_vol[monthly_vol["年月_dt"] >= "2026-01-01"]
 
     col_a, col_b = st.columns(2)
 
@@ -474,7 +497,7 @@ with tab3:
             text="成交筆數",
             color="成交筆數",
             color_continuous_scale="Blues",
-            title="月度成交量（2026 Q1）",
+            title="月度成交量",
             labels={"年月_dt": "月份", "成交筆數": "成交筆數"},
         )
         fig_vol.update_traces(textposition="outside")
@@ -486,17 +509,16 @@ with tab3:
             monthly_vol,
             x="年月_dt", y="平均單價",
             markers=True,
-            title="月度平均每坪單價趨勢（2026 Q1）",
+            title="月度平均每坪單價趨勢",
             labels={"年月_dt": "月份", "平均單價": "平均單價 (萬/坪)"},
         )
         fig_price_trend.update_layout(xaxis_tickformat="%Y/%m", height=380)
         st.plotly_chart(fig_price_trend, use_container_width=True)
 
     # 各區 × 月 成交量堆疊圖
-    st.subheader("各區月度成交量（2026 Q1）")
+    st.subheader("各區月度成交量")
     monthly_district = (
-        df_trend[df_trend["年月_dt"] >= "2026-01-01"]
-        .groupby(["年月_dt", "行政區"])
+        df_trend.groupby(["年月_dt", "行政區"])
         .size()
         .reset_index(name="成交筆數")
     )
