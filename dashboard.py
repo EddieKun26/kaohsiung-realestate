@@ -147,6 +147,14 @@ def clear_filters():
     st.session_state["ping_grp"] = []
     st.session_state["price"]    = (price_min, price_max)
 
+# ── 資料日期範圍（供標題與側欄共用）───────────────────────────
+_date_min = df_all["交易日期"].min()
+_date_max = df_all["交易日期"].max()
+_date_range = (
+    f"{_date_min.strftime('%Y-%m-%d')} ～ {_date_max.strftime('%Y-%m-%d')}"
+    if pd.notna(_date_min) and pd.notna(_date_max) else "—"
+)
+
 # ── Sidebar 篩選器 ──────────────────────────────────────────
 with st.sidebar:
     st.title("🔍 篩選條件")
@@ -233,12 +241,6 @@ df = apply_filters(df_all)
 
 # ── 主標題 ──────────────────────────────────────────────────
 st.title("🏙️ 高雄房產成交分析儀表板")
-_date_min = df_all["交易日期"].min()
-_date_max = df_all["交易日期"].max()
-_date_range = (
-    f"{_date_min.strftime('%Y-%m-%d')} ～ {_date_max.strftime('%Y-%m-%d')}"
-    if pd.notna(_date_min) and pd.notna(_date_max) else "—"
-)
 st.caption(f"資料期間：{_date_range}｜高雄 13 個行政區｜住宅大樓 & 華廈")
 
 # ── KPI 卡片 ────────────────────────────────────────────────
