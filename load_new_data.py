@@ -181,7 +181,38 @@ def main():
         if col in df_out.columns:
             df_out[col] = pd.to_numeric(df_out[col], errors="coerce").round(2)
 
-    # 3. 去重複（保留先出現的）
+    # 3. 修復建案名稱中的 ? 佔位符
+    # 原理：政府資料轉碼失敗時某些字元被替換為 ASCII ?（0x3F）
+    # 先套用手動字典，再用「相同長度且非 ? 位置完全相符」自動比對
+    MANUAL_FIX: dict[str, str] = {
+        "築?":   "築悅",
+    }
+
+    import re
+    def _make_pattern(name: str) -> str:
+        return "".join("." if c == "?" else re.escape(c) for c in name)
+
+    all_names = df_out["成交建案名稱"].dropna().unique()
+    clean_names = [n for n in all_names if "?" not in n and n.strip()]
+    fix_map: dict[str, str] = dict(MANUAL_FIX)
+    for dirty in all_names:
+        if "?" not in dirty or not dirty.strip() or dirty in fix_map:
+            continue
+        pat = re.compile("^" + _make_pattern(dirty) + "$")
+        candidates = [n for n in clean_names if len(n) == len(dirty) and pat.match(n)]
+        if len(candidates) == 1:
+            fix_map[dirty] = candidates[0]
+        elif len(candidates) > 1:
+            freq = df_out["成交建案名稱"].value_counts()
+            fix_map[dirty] = max(candidates, key=lambda n: freq.get(n, 0))
+
+    if fix_map:
+        df_out["成交建案名稱"] = df_out["成交建案名稱"].replace(fix_map)
+        print(f"\n🔧 建案名稱修復 {len(fix_map)} 筆：")
+        for bad, good in fix_map.items():
+            print(f"   {bad!r} → {good!r}")
+
+    # 4. 去重複（保留先出現的）
     before = len(df_out)
     df_out = df_out.drop_duplicates(subset=DEDUP_COLS, keep="first")
     after  = len(df_out)
