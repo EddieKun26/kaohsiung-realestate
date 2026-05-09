@@ -134,17 +134,20 @@ districts  = sorted(df_all["行政區"].dropna().unique().tolist())
 ping_groups = [g for g in PING_LABELS if g in df_all["坪數分組"].unique()]
 price_min  = float(df_all["每坪單價(萬)"].replace(0, np.nan).dropna().min())
 price_max  = float(df_all["每坪單價(萬)"].replace(0, np.nan).dropna().max())
+years      = sorted(df_all["年份"].dropna().unique().astype(int).tolist())
 
 def reset_filters():
     st.session_state["tx"]       = tx_types
     st.session_state["dist"]     = districts
     st.session_state["ping_grp"] = ping_groups
+    st.session_state["year"]     = years
     st.session_state["price"]    = (price_min, price_max)
 
 def clear_filters():
     st.session_state["tx"]       = []
     st.session_state["dist"]     = []
     st.session_state["ping_grp"] = []
+    st.session_state["year"]     = []
     st.session_state["price"]    = (price_min, price_max)
 
 # ── 資料日期範圍（供標題與側欄共用）───────────────────────────
@@ -173,6 +176,21 @@ with st.sidebar:
     st.markdown('<p class="filter-label">交易類型</p>', unsafe_allow_html=True)
     sel_tx = st.multiselect("", tx_types, default=tx_types, key="tx",
                             label_visibility="collapsed")
+
+    # 年度
+    col_label_yr, col_yr_a, col_yr_b = st.columns([2, 1, 1])
+    with col_label_yr:
+        st.markdown('<p class="filter-label">年度</p>', unsafe_allow_html=True)
+    with col_yr_a:
+        if st.button("全選", key="year_all"):
+            st.session_state["year"] = years
+            st.rerun()
+    with col_yr_b:
+        if st.button("全清", key="year_none"):
+            st.session_state["year"] = []
+            st.rerun()
+    sel_years = st.multiselect("", years, default=years, key="year",
+                               label_visibility="collapsed")
 
     # 行政區
     col_label, col_a, col_b = st.columns([2, 1, 1])
@@ -228,6 +246,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         df["交易類型"].isin(sel_tx) &
         df["行政區"].isin(sel_districts) &
         df["坪數分組"].isin(sel_ping_groups) &
+        df["年份"].isin(sel_years) &
         df["每坪單價(萬)"].between(*sel_price)
     )
     if hide_abnormal:
