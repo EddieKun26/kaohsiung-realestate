@@ -7,6 +7,9 @@
     python load_new_data.py
 """
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -20,6 +23,7 @@ SOURCE_DIRS = [
     "20260211_opendata",
     "20260221_opendata",
     "download (3)",
+    "115年3月11日至 115年3月20日之預售屋案件",
 ]
 
 # 每個資料夾中要讀取的高雄檔案（不分大小寫）
